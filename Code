@@ -1,0 +1,240 @@
+// =========================================== // BUSINESS RULE: Auto-assign Student Requests // Table: u_student_request // When: before, insert // =========================================== (function executeRule(current, previous) { // Auto-assign based on request category var category = current.u_category.toString(); var assignmentGroup = '';
+
+switch(category) {
+    case 'it_support':
+        assignmentGroup = 'IT Help Desk';
+        break;
+    case 'financial_aid':
+        assignmentGroup = 'Financial Aid Team';
+        break;
+    case 'housing':
+        assignmentGroup = 'Housing Services';
+        break;
+    case 'academic_advising':
+        assignmentGroup = 'Academic Advisors';
+        break;
+    default:
+        assignmentGroup = 'Student Services';
+}
+
+// Find and set assignment group
+var grp = new GlideRecord('sys_user_group');
+if (grp.get('name', assignmentGroup)) {
+    current.assignment_group = grp.sys_id;
+}
+
+// Set priority based on keywords
+var description = current.short_description.toString().toLowerCase();
+if (description.indexOf('urgent') > -1 || description.indexOf('emergency') > -1) {
+    current.priority = 1; // Critical
+}
+})(current, previous);
+
+// =========================================== // SCRIPT INCLUDE: StudentRequestUtils // Type: Server-side // =========================================== var StudentRequestUtils = Class.create(); StudentRequestUtils.prototype = { initialize: function() { },
+
+// Get student information from student table
+getStudentInfo: function(studentId) {
+    var student = {};
+    var gr = new GlideRecord('u_student');
+    if (gr.get('student_id', studentId)) {
+        student.name = gr.getValue('name');
+        student.email = gr.getValue('email');
+        student.major = gr.getValue('major');
+        student.year = gr.getValue('academic_year');
+        student.gpa = gr.getValue('gpa');
+        return student;
+    }
+    return null;
+},
+
+// Check if student has open requests
+hasOpenRequests: function(studentId) {
+    var gr = new GlideRecord('u_student_request');
+    gr.addQuery('u_student_id', studentId);
+    gr.addQuery('state', 'IN', '1,2,3'); // New, In Progress, On Hold
+    gr.query();
+    return gr.hasNext();
+},
+
+// Calculate SLA based on priority
+calculateSLA: function(priority) {
+    var hours = 0;
+    switch(priority) {
+        case '1': hours = 4; break;   // Critical
+        case '2': hours = 8; break;   // High
+        case '3': hours = 24; break;  // Medium
+        case '4': hours = 72; break;  // Low
+        default: hours = 48;
+    }
+    
+    var gdt = new GlideDateTime();
+    gdt.addSeconds(hours * 3600);
+    return gdt;
+},
+
+// Send notification to student
+notifyStudent: function(requestId, message) {
+    var gr = new GlideRecord('u_student_request');
+    if (gr.get(requestId)) {
+        gs.eventQueue('student.request.update', gr, message);
+    }
+},
+
+type: 'StudentRequestUtils'
+};
+
+// =========================================== // CLIENT SCRIPT: Validate Student ID // Type: onChange // Field: u_student_id // =========================================== function onChange(control, oldValue, newValue, isLoading) { if (isLoading || newValue === '') { return; }
+
+// Validate student ID format (example: S followed by 7 digits)
+var pattern = /^S\d{7}$/;
+if (!pattern.test(newValue)) {
+    g_form.showErrorBox('u_student_id', 'Invalid Student ID format. Use S followed by 7 digits (e.g., S1234567)');
+    g_form.setValue('u_student_id', '');
+    return;
+}
+
+// Check if student exists
+var ga = new GlideAjax('StudentRequestUtils');
+ga.addParam('sysparm_name', 'getStudentInfo');
+ga.addParam('sysparm_student_id', newValue);
+ga.getXML(function(response) {
+    var answer = response.responseXML.documentElement.getAttribute('answer');
+    if (answer) {
+        var student = JSON.parse(answer);
+        g_form.setValue('u_student_name', student.name);
+        g_form.setValue('u_student_email', student.email);
+    } else {
+        g_form.showErrorBox('u_student_id', 'Student ID not found in system');
+    }
+});
+}
+
+// =========================================== // UI ACTION: Escalate Request // Table: u_student_request // Action name: escalate_request // =========================================== function escalateRequest() { var requestId = g_form.getUniqueValue();
+
+// Confirm escalation
+var confirmed = confirm('Are you sure you want to escalate this request to management?');
+if (!confirmed) {
+    return;
+}
+
+// Call server-side script
+var ga = new GlideAjax('StudentRequestUtils');
+ga.addParam('sysparm_name', 'escalateRequest');
+ga.addParam('sysparm_request_id', requestId);
+ga.getXML(function(response) {
+    var result = response.responseXML.documentElement.getAttribute('answer');
+    if (result === 'success') {
+        g_form.addInfoMessage('Request has been escalated successfully');
+        g_form.reload();
+    } else {
+        g_form.addErrorMessage('Failed to escalate request');
+    }
+});
+}
+
+// =========================================== // SCHEDULED JOB: Close Resolved Requests // Run daily to auto-close resolved requests after 7 days // =========================================== (function() { var gr = new GlideRecord('u_student_request'); gr.addQuery('state', 6); // Resolved gr.addEncodedQuery('sys_updated_on<javascript:gs.daysAgoStart(7)'); gr.query();
+
+var count = 0;
+while (gr.next()) {
+    gr.state = 7; // Closed
+    gr.close_notes = 'Auto-closed after 7 days in resolved state';
+    gr.update();
+    count++;
+}
+
+gs.info('Auto-closed ' + count + ' resolved student requests');
+})();
+
+// =========================================== // FLOW DESIGNER: Student Request Approval // Trigger: When student request is submitted // =========================================== /* Flow Steps:
+
+Get student information
+Check if amount > $500 (needs approval)
+If yes, request approval from department head
+Send notification to student
+If approved, assign to fulfillment team
+Update request state
+This would be built in Flow Designer UI, but here's the logic: */
+
+// =========================================== // CATALOG CLIENT SCRIPT: Dynamic Questions // For Service Catalog items // =========================================== function onLoad() { // Hide/show fields based on request type var requestType = g_form.getValue('request_type');
+
+if (requestType === 'financial_aid') {
+    g_form.setVisible('financial_need', true);
+    g_form.setVisible('family_income', true);
+    g_form.setMandatory('financial_need', true);
+} else {
+    g_form.setVisible('financial_need', false);
+    g_form.setVisible('family_income', false);
+    g_form.setMandatory('financial_need', false);
+}
+
+if (requestType === 'housing') {
+    g_form.setVisible('preferred_dorm', true);
+    g_form.setVisible('roommate_preference', true);
+} else {
+    g_form.setVisible('preferred_dorm', false);
+    g_form.setVisible('roommate_preference', false);
+}
+}
+
+// =========================================== // REST API: External Student System Integration // Type: Scripted REST API // =========================================== (function process(request, response) { var requestBody = request.body.data; var studentId = requestBody.student_id; var requestType = requestBody.request_type;
+
+try {
+    // Create new student request
+    var gr = new GlideRecord('u_student_request');
+    gr.initialize();
+    gr.u_student_id = studentId;
+    gr.u_category = requestType;
+    gr.short_description = requestBody.description;
+    gr.description = requestBody.details;
+    gr.priority = requestBody.priority || '3';
+    
+    var sysId = gr.insert();
+    
+    if (sysId) {
+        response.setStatus(201);
+        response.setBody({
+            success: true,
+            request_number: gr.number.toString(),
+            sys_id: sysId.toString(),
+            message: 'Student request created successfully'
+        });
+    } else {
+        throw new Error('Failed to create request');
+    }
+    
+} catch (ex) {
+    response.setStatus(500);
+    response.setBody({
+        success: false,
+        error: ex.message
+    });
+}
+})(request, response);
+
+// =========================================== // WIDGET (Service Portal): Student Dashboard // Server Script // =========================================== (function() { data.studentId = gs.getUserID(); data.requests = [];
+
+// Get student's open requests
+var gr = new GlideRecord('u_student_request');
+gr.addQuery('u_student_id', data.studentId);
+gr.addQuery('state', '!=', 7); // Not closed
+gr.orderByDesc('sys_created_on');
+gr.setLimit(10);
+gr.query();
+
+while (gr.next()) {
+    data.requests.push({
+        number: gr.number.toString(),
+        description: gr.short_description.toString(),
+        state: gr.state.getDisplayValue(),
+        priority: gr.priority.getDisplayValue(),
+        created: gr.sys_created_on.getDisplayValue()
+    });
+}
+
+// Get student statistics
+data.stats = {
+    total: data.requests.length,
+    urgent: 0,
+    resolved_this_month: 0
+};
+})();
