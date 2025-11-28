@@ -24,6 +24,7 @@ if (grp.get('name', assignmentGroup)) {
 }
 
 // Set priority based on keywords
+//project
 var description = current.short_description.toString().toLowerCase();
 if (description.indexOf('urgent') > -1 || description.indexOf('emergency') > -1) {
     current.priority = 1; // Critical
