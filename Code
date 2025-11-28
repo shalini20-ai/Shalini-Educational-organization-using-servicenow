@@ -211,7 +211,7 @@ try {
 }
 })(request, response);
 
-// =========================================== // WIDGET (Service Portal): Student Dashboard // Server Script // =========================================== (function() { data.studentId = gs.getUserID(); data.requests = [];
+// ========================================================== // WIDGET (Service Portal): Student Dashboard // Server Script // =========================================== (function() { data.studentId = gs.getUserID(); data.requests = [];
 
 // Get student's open requests
 var gr = new GlideRecord('u_student_request');
@@ -220,6 +220,7 @@ gr.addQuery('state', '!=', 7); // Not closed
 gr.orderByDesc('sys_created_on');
 gr.setLimit(10);
 gr.query();
+()
 
 while (gr.next()) {
     data.requests.push({
